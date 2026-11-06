@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Dashboard — จัดการร้านเติมเกม</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/css/theme.css?v=7" />
+  <link rel="stylesheet" href="/css/admin.css?v=7" />
+</head>
+<body>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- ==================== ADMIN LOGIN SCREEN ==================== -->
+  <section id="adminLoginView" class="admin-login-screen">
+    <div class="card login-window">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <span class="tag">ADMIN DASHBOARD</span>
+        <a href="/" class="btn btn-ghost btn-sm">← หน้าร้าน</a>
+      </div>
+      <h1 style="font-size:1.4rem; font-weight:700; margin:0 0 6px;">
+        เข้าสู่ระบบหลังบ้าน
+      </h1>
+      <p style="margin:0 0 18px; font-size:0.9rem; color:var(--muted);">
+        ตรวจสลิป อัปเดตสถานะออเดอร์ จัดการเกมและราคา
+      </p>
+
+      <form id="adminLoginForm" class="form-stack">
+        <div class="field">
+          <label for="loginUsername" class="field-label">ชื่อผู้ใช้ (Username)</label>
+          <input type="text" id="loginUsername" class="input" value="admin" required autocomplete="username" />
+        </div>
+        <div class="field">
+          <label for="loginPassword" class="field-label">รหัสผ่าน (Password)</label>
+          <input
+            type="password"
+            id="loginPassword"
+            class="input"
+            placeholder="ค่าเริ่มต้น: admin1234"
+            required
+            autocomplete="current-password"
+          />
+        </div>
+        <div id="loginErrorMsg" class="alert-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-block">เข้าสู่ระบบ</button>
+      </form>
+
+      <p style="margin:16px 0 0; font-size:0.82rem; color:var(--muted); border-top:1px solid var(--border); padding-top:12px;">
+        รหัสเริ่มต้น: <strong>admin</strong> / <strong>admin1234</strong>
+      </p>
+    </div>
+  </section>
+
+  <!-- ==================== ADMIN WORKSPACE ==================== -->
+  <div id="adminAppView" class="admin-shell" hidden>
+    <aside class="admin-sidebar">
+      <div class="admin-brand-box">
+        <strong id="adminBrandName" style="font-size:1rem; font-weight:700; display:block;">
+          TopUp Station
+        </strong>
+        <span class="muted" style="font-size:0.78rem;">
+          ระบบจัดการหลังบ้าน
+        </span>
+      </div>
+
+      <nav class="admin-nav" aria-label="เมนูผู้ดูแลระบบ">
+        <button type="button" class="admin-nav-btn is-active" data-tab="overview">
+          ภาพรวมร้าน
+        </button>
+        <button type="button" class="admin-nav-btn" data-tab="orders">
+          รายการเติมเกม
+          <span id="navPendingBadge" class="nav-badge is-alert" hidden>0</span>
+        </button>
+        <button type="button" class="admin-nav-btn" data-tab="games">
+          เกม &amp; แพ็กเกจ
+          <span id="navGamesBadge" class="nav-badge">0</span>
+        </button>
+        <button type="button" class="admin-nav-btn" data-tab="settings">
+          ตั้งค่าร้าน &amp; QR
+        </button>
+      </nav>
+
+      <div class="admin-sidebar-foot">
+        <a href="/" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="flex:1;">
+          ดูหน้าร้าน ↗
+        </a>
+        <button type="button" id="adminLogoutBtn" class="btn btn-ghost btn-sm" style="flex:1;">
+          ออก (<span id="adminUserLabel">admin</span>)
+        </button>
+      </div>
+    </aside>
+
+    <main class="admin-main">
+      <!-- ==================== TAB 1: OVERVIEW ==================== -->
+      <section id="tab-overview">
+        <div class="admin-head">
+          <div>
+            <h1 class="admin-page-title">ภาพรวมร้านเติมเกม</h1>
+          </div>
+          <button type="button" id="refreshAdminBtn" class="btn btn-secondary btn-sm">
+            รีเฟรชข้อมูล
+          </button>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="card kpi-card">
+            <span class="kpi-label">ยอดขายสะสม</span>
+            <strong id="kpiRevenue" class="kpi-val" style="color:var(--primary);">฿0</strong>
+          </div>
+          <div class="card kpi-card">
+            <span class="kpi-label">รอตรวจสลิป / รอเติม</span>
+            <strong id="kpiPending" class="kpi-val" style="color:var(--danger);">0</strong>
+          </div>
+          <div class="card kpi-card">
+            <span class="kpi-label">เติมสำเร็จแล้ว</span>
+            <strong id="kpiCompleted" class="kpi-val" style="color:var(--success);">0</strong>
+          </div>
+          <div class="card kpi-card">
+            <span class="kpi-label">เกม / แพ็กเกจที่เปิดขาย</span>
+            <strong id="kpiCatalog" class="kpi-val">0 / 0</strong>
+          </div>
+        </div>
+
+        <!-- Quick Promo & Discount Controller on Overview -->
+        <div class="card overview-promo-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+            <div>
+              <h2 style="font-size:1.1rem; font-weight:700; margin:0 0 4px;">
+                ⚡ แผงจัดการโปรโมชั่น &amp; ส่วนลดด่วน
+              </h2>
+              <p class="muted" style="font-size:0.86rem; margin:0;">
+                ปรับลดราคาแต่ละเกมได้ในคลิกเดียว หรือเลือกดูและแก้ราคาทุกแพ็กเกจแบบละเอียด
+              </p>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button type="button" class="btn btn-secondary btn-sm" id="overviewOpenPromoBtn">
+                ⚡ ปรับลดทั้งร้าน
+              </button>
+              <button type="button" class="btn btn-primary btn-sm" data-jump-tab="games">
+                แก้ไขราคาทุกเกมแบบละเอียด →
+              </button>
+            </div>
+          </div>
+          <div id="overviewPromoGamesGrid" class="promo-games-grid"></div>
+        </div>
+
+        <div class="card" style="padding:20px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+            <h2 style="font-size:1.1rem; font-weight:700; margin:0;">
+              รายการแจ้งเติมเกมล่าสุด
+            </h2>
+            <button type="button" class="btn btn-secondary btn-sm" data-jump-tab="orders">
+              ดูทั้งหมด →
+            </button>
+          </div>
+          <div id="recentOrdersBox"></div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 2: ORDERS FULFILLMENT ==================== -->
+      <section id="tab-orders" hidden>
+        <div class="admin-head">
+          <div>
+            <h1 class="admin-page-title">รายการแจ้งเติมเกมจากลูกค้า</h1>
+          </div>
+          <select id="adminOrderFilter" class="select" style="max-width:240px;">
+            <option value="all">ทุกสถานะออเดอร์</option>
+            <option value="pending">รอตรวจสลิป (Pending)</option>
+            <option value="processing">กำลังดำเนินการเติม</option>
+            <option value="completed">เติมสำเร็จแล้ว</option>
+            <option value="cancelled">ยกเลิกรายการ</option>
+          </select>
+        </div>
+
+        <div id="adminOrdersList" class="orders-stack"></div>
+      </section>
+
+      <!-- ==================== TAB 3: GAMES & PACKAGES MANAGER ==================== -->
+      <section id="tab-games" hidden>
+        <div class="admin-head">
+          <div>
+            <h1 class="admin-page-title">จัดการเกม &amp; ปรับแต่งราคา/ส่วนลด</h1>
+            <p class="muted" style="margin:4px 0 0; font-size:0.88rem;">
+              เลือกเกมจากเมนูด้านซ้ายเพื่อจัดการแพ็กเกจและส่วนลดรายเกม หรือกดดูภาพรวมทุกเกม
+            </p>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button type="button" id="openStorePromoBtn" class="btn btn-secondary btn-sm" style="font-weight:600; color:var(--primary); border-color:var(--primary);">
+              ⚡ จัดโปรลดราคาทั้งร้าน
+            </button>
+            <button type="button" id="openNewGameBtn" class="btn btn-primary btn-sm">
+              + เพิ่มเกมใหม่
+            </button>
+          </div>
+        </div>
+
+        <div class="games-management-layout">
+          <!-- Left Column: Game Selector Menu -->
+          <aside class="games-selector-sidebar">
+            <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:8px; border-bottom:1px solid var(--border);">
+              <strong style="font-size:0.92rem; color:var(--text);">🎮 เมนูเลือกเกม</strong>
+              <span id="sidebarGameCount" class="tag" style="font-size:0.72rem;">0 เกม</span>
+            </div>
+            <button type="button" id="sidebarNewGameBtn" class="btn btn-primary btn-block btn-sm" style="margin-top:2px; font-weight:600;">
+              + เพิ่มเกมใหม่
+            </button>
+            <input type="text" id="adminGameSearch" class="input input-sm" placeholder="🔍 ค้นหาเกม..." style="padding:6px 10px; font-size:0.85rem;" />
+            <div id="adminCategoryTabs" class="chip-row" style="padding-bottom:2px;"></div>
+            <div id="gameSelectorList" class="game-selector-nav"></div>
+          </aside>
+
+          <!-- Right Column: Focused Game Management Workspace -->
+          <div class="game-management-content" id="gameDetailWorkspace"></div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 4: STORE SETTINGS & QR ==================== -->
+      <section id="tab-settings" hidden>
+        <div class="admin-head">
+          <div>
+            <h1 class="admin-page-title">ตั้งค่าหน้าร้าน &amp; บัญชีรับเงิน</h1>
+          </div>
+        </div>
+
+        <div class="settings-split">
+          <form id="storeSettingsForm" class="card form-stack" style="padding:22px;">
+            <h2 style="font-size:1.1rem; font-weight:700; margin:0;">ข้อมูลแบรนด์ &amp; หน้าแรก</h2>
+
+            <div class="form-grid-2">
+              <div class="field">
+                <label for="setStoreName" class="field-label">ชื่อร้าน</label>
+                <input type="text" id="setStoreName" class="input" required />
+              </div>
+              <div class="field">
+                <label for="setStoreTagline" class="field-label">คำโปรยใต้ชื่อร้าน</label>
+                <input type="text" id="setStoreTagline" class="input" />
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="setAnnouncement" class="field-label">ข้อความแถบประกาศด้านบนสุด</label>
+              <input type="text" id="setAnnouncement" class="input" />
+            </div>
+
+            <div class="form-grid-2">
+              <div class="field">
+                <label for="setHeroKicker" class="field-label">ป้ายกำกับหัวข้อ (Kicker)</label>
+                <input type="text" id="setHeroKicker" class="input" />
+              </div>
+              <div class="field">
+                <label for="setOpenHours" class="field-label">เวลาเปิดให้บริการ</label>
+                <input type="text" id="setOpenHours" class="input" />
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="setHeroHeading" class="field-label">หัวข้อใหญ่หน้าแรก</label>
+              <input type="text" id="setHeroHeading" class="input" />
+            </div>
+
+            <div class="field">
+              <label for="setHeroSubtext" class="field-label">คำอธิบายโปรยหน้าแรก</label>
+              <textarea id="setHeroSubtext" class="textarea" rows="2"></textarea>
+            </div>
+
+            <h2 style="font-size:1.1rem; font-weight:700; margin:10px 0 0;">ข้อมูล PromptPay &amp; ช่องทางติดต่อ</h2>
+
+            <div class="form-grid-2">
+              <div class="field">
+                <label for="setPromptpayId" class="field-label">เบอร์ / เลข PromptPay</label>
+                <input type="text" id="setPromptpayId" class="input" />
+              </div>
+              <div class="field">
+                <label for="setPromptpayName" class="field-label">ชื่อบัญชีรับโอน</label>
+                <input type="text" id="setPromptpayName" class="input" />
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label">รูป QR Code รับเงิน (แสดงให้ลูกค้าสแกน)</label>
+              <div class="upload-row-box">
+                <label for="qrUploadFile" class="btn btn-secondary btn-sm" style="cursor:pointer;">
+                  เลือกรูป QR จากเครื่อง
+                </label>
+                <input type="file" id="qrUploadFile" accept="image/jpeg,image/png,image/webp" hidden />
+                <input
+                  type="text"
+                  id="setPromptpayQrUrl"
+                  class="input"
+                  style="flex:1; min-width:180px;"
+                  placeholder="ลิงก์รูป QR หรืออัปโหลดจากปุ่มซ้าย"
+                />
+              </div>
+            </div>
+
+            <div class="form-grid-2">
+              <div class="field">
+                <label for="setLine" class="field-label">LINE ติดต่อร้าน</label>
+                <input type="text" id="setLine" class="input" />
+              </div>
+              <div class="field">
+                <label for="setFb" class="field-label">Facebook เพจร้าน</label>
+                <input type="text" id="setFb" class="input" />
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="margin-top:6px;">บันทึกการตั้งค่า</button>
+          </form>
+
+          <form id="changePasswordForm" class="card form-stack" style="padding:22px;">
+            <h2 style="font-size:1.1rem; font-weight:700; margin:0;">เปลี่ยนรหัสผ่านแอดมิน</h2>
+            <div class="field">
+              <label for="curAdminPass" class="field-label">รหัสผ่านปัจจุบัน</label>
+              <input type="password" id="curAdminPass" class="input" required />
+            </div>
+            <div class="field">
+              <label for="newAdminPass" class="field-label">รหัสผ่านใหม่ (อย่างน้อย 8 ตัว)</label>
+              <input type="password" id="newAdminPass" class="input" minlength="8" required />
+            </div>
+            <button type="submit" class="btn btn-secondary" style="margin-top:6px;">อัปเดตรหัสผ่าน</button>
+          </form>
+
+          <!-- Database Resilience & Hot Backup Engine Card -->
+          <div class="card" style="padding:22px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+              <div>
+                <h2 style="font-size:1.1rem; font-weight:700; margin:0 0 4px; display:flex; align-items:center; gap:8px;">
+                  <span>🗄️</span> ความทนทานฐานข้อมูล & การสำรองข้อมูล (Crash Resilience)
+                </h2>
+                <p class="muted" style="margin:0; font-size:0.86rem;">
+                  SQLite WAL Mode ทนทานต่อการดับ/ล่มกะทันหัน พร้อมระบบกู้คืนอัตโนมัติ (Self-Healing) และ Hot Backup
+                </p>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button type="button" id="checkpointDbBtn" class="btn btn-secondary btn-sm" title="บันทึกและล้าง WAL log เข้าฐานข้อมูลหลัก">
+                  ⚡ Flush WAL
+                </button>
+                <button type="button" id="backupDbBtn" class="btn btn-primary btn-sm">
+                  💾 สำรองข้อมูลทันที
+                </button>
+              </div>
+            </div>
+
+            <!-- Health Indicators Grid -->
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:18px;">
+              <div class="db-stat-card">
+                <span class="muted" style="font-size:0.78rem;">สถานะ Integrity Check</span>
+                <div style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+                  <span class="status-dot is-healthy" id="dbStatusDot"></span>
+                  <strong style="font-size:0.95rem; color:#16a34a;" id="dbHealthStatus">ปกติ (Healthy)</strong>
+                </div>
+              </div>
+              <div class="db-stat-card">
+                <span class="muted" style="font-size:0.78rem;">ขนาดฐานข้อมูล (DB / WAL)</span>
+                <strong style="font-size:0.95rem; margin-top:4px; display:block;" id="dbSizeText">-</strong>
+              </div>
+              <div class="db-stat-card">
+                <span class="muted" style="font-size:0.78rem;">สำรองข้อมูลล่าสุด</span>
+                <strong style="font-size:0.95rem; margin-top:4px; display:block;" id="dbLastBackupText">-</strong>
+              </div>
+              <div class="db-stat-card">
+                <span class="muted" style="font-size:0.78rem;">จำนวนไฟล์ Snapshot</span>
+                <strong style="font-size:0.95rem; margin-top:4px; display:block;" id="dbBackupCountText">-</strong>
+              </div>
+            </div>
+
+            <!-- Recent Backups List -->
+            <div>
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <span style="font-size:0.86rem; font-weight:600; color:var(--text-2);">
+                  ประวัติไฟล์ Snapshot สำรองข้อมูล (เก็บล่าสุด 10 รายการ)
+                </span>
+                <button type="button" id="refreshDbHealthBtn" class="btn-micro" style="font-size:0.75rem;">
+                  🔄 รีเฟรช
+                </button>
+              </div>
+              <div id="dbBackupList" class="db-backup-list">
+                <span class="muted" style="font-size:0.84rem;">กำลังโหลดข้อมูลสำรอง...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ==================== MODAL 1: CREATE / EDIT GAME ==================== -->
+  <div id="gameModal" class="modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-backdrop" id="closeGameBackdrop"></div>
+    <div class="modal-dialog" style="max-width:620px;">
+      <button type="button" id="closeGameModalBtn" class="modal-close">✕</button>
+      <span class="tag" id="gameModalKicker" style="margin-bottom:8px;">GAME EDITOR</span>
+      <h2 id="gameModalTitle" class="modal-title">เพิ่มเกมใหม่</h2>
+
+      <form id="gameEditorForm" class="form-stack">
+        <input type="hidden" id="editGameId" />
+
+        <div class="form-grid-2">
+          <div class="field">
+            <label for="editGameName" class="field-label">ชื่อเกม *</label>
+            <input type="text" id="editGameName" class="input" placeholder="เช่น RoV: Arena of Valor" required />
+          </div>
+          <div class="field">
+            <label for="editGameSlug" class="field-label">รหัสย่อ (Slug ภาษาอังกฤษ)</label>
+            <input type="text" id="editGameSlug" class="input" placeholder="เช่น rov, mlbb" />
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="field">
+            <label for="editGamePublisher" class="field-label">ค่ายเกม</label>
+            <input type="text" id="editGamePublisher" class="input" placeholder="เช่น Garena, Riot Games" />
+          </div>
+          <div class="field">
+            <label for="editGameCategory" class="field-label">หมวดหมู่</label>
+            <input type="text" id="editGameCategory" class="input" placeholder="เช่น MOBA, FPS, RPG" />
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="field">
+            <label for="editGameCurrency" class="field-label">ชื่อหน่วยเงินในเกม *</label>
+            <input type="text" id="editGameCurrency" class="input" placeholder="เช่น คูปอง, VP, เพชร, UC" required />
+            <div style="display:flex; gap:4px; margin-top:5px; flex-wrap:wrap;">
+              <button type="button" class="btn-micro" data-fill-cur="คูปอง">คูปอง</button>
+              <button type="button" class="btn-micro" data-fill-cur="VP">VP</button>
+              <button type="button" class="btn-micro" data-fill-cur="Genesis Crystals">Crystals</button>
+              <button type="button" class="btn-micro" data-fill-cur="เพชร">เพชร</button>
+              <button type="button" class="btn-micro" data-fill-cur="UC">UC</button>
+              <button type="button" class="btn-micro" data-fill-cur="Oneiric Shards">Shards</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="editGameDiscount" class="field-label">ป้ายโปรโมชัน</label>
+            <input type="text" id="editGameDiscount" class="input" placeholder="เช่น ลดสูงสุด 15%" />
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="field">
+            <label for="editGameUidLabel" class="field-label">หัวข้อช่องกรอกไอดี *</label>
+            <input type="text" id="editGameUidLabel" class="input" placeholder="เช่น OpenID / UID ตัวเลข" required />
+            <div style="display:flex; gap:4px; margin-top:5px; flex-wrap:wrap;">
+              <button type="button" class="btn-micro" data-fill-uid="UID ผู้เล่น (ตัวเลข)">UID ตัวเลข</button>
+              <button type="button" class="btn-micro" data-fill-uid="Riot ID พร้อม #Tag">Riot ID #Tag</button>
+              <button type="button" class="btn-micro" data-fill-uid="Character ID">Character ID</button>
+              <button type="button" class="btn-micro" data-fill-uid="OpenID">OpenID</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="editGameUidPlaceholder" class="field-label">ข้อความตัวอย่างในช่อง</label>
+            <input type="text" id="editGameUidPlaceholder" class="input" placeholder="เช่น 812345678" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="editGameUidHint" class="field-label">วิธีดู UID ในเกม</label>
+          <input type="text" id="editGameUidHint" class="input" placeholder="อธิบายสั้นๆ ว่าดู UID ตรงไหน" />
+        </div>
+
+        <div class="form-grid-2">
+          <label class="check-label" style="margin-top:28px;">
+            <input type="checkbox" id="editGameReqServer" />
+            <span>ต้องให้ลูกค้าเลือก Server</span>
+          </label>
+          <div class="field">
+            <label for="editGameServers" class="field-label">ตัวเลือก Server (คั่นด้วย ,)</label>
+            <input type="text" id="editGameServers" class="input" placeholder="เช่น Asia,America,Europe" />
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="field">
+            <label for="editGameIconKey" class="field-label">สไตล์ไอคอน</label>
+            <select id="editGameIconKey" class="select">
+              <option value="sword">ดาบ (Sword)</option>
+              <option value="crosshair">เป้าเล็ง (Crosshair)</option>
+              <option value="crystal">คริสตัล (Crystal)</option>
+              <option value="flame">เปลวไฟ (Flame)</option>
+              <option value="helmet">หมวกเกราะ (Helmet)</option>
+              <option value="star">ดวงดาว (Star)</option>
+              <option value="crown">มงกุฎ (Crown)</option>
+              <option value="gamepad">จอยเกม (Gamepad)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editGameColor" class="field-label">สีประจำเกม</label>
+            <input type="color" id="editGameColor" class="input" value="#2563eb" style="padding:4px 8px; height:46px;" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field-label">รูปปกเกม (เว้นว่างเพื่อใช้ภาพอัตโนมัติได้)</label>
+          <div class="upload-row-box">
+            <label for="gameCoverFile" class="btn btn-secondary btn-sm" style="cursor:pointer;">
+              อัปโหลดรูปปก
+            </label>
+            <input type="file" id="gameCoverFile" accept="image/jpeg,image/png,image/webp" hidden />
+            <input
+              type="text"
+              id="editGameImageUrl"
+              class="input"
+              style="flex:1; min-width:160px;"
+              placeholder="ลิงก์รูปภาพ หรือปล่อยว่าง"
+            />
+          </div>
+        </div>
+
+        <label id="starterPkgsWrap" class="check-label" style="background:#f0f9ff; padding:10px 12px; border-radius:var(--radius-sm); border:1px solid #bae6fd;">
+          <input type="checkbox" id="editGameStarterPkgs" checked />
+          <span><strong>⚡ สร้าง 3 แพ็กเกจราคาเริ่มต้นให้อัตโนมัติ</strong> (เช่น 100, 300, 500 หน่วย เพื่อให้พร้อมเปิดขายทันที)</span>
+        </label>
+
+        <label class="check-label">
+          <input type="checkbox" id="editGameActive" checked />
+          <span>เปิดแสดงเกมนี้บนหน้าร้าน</span>
+        </label>
+
+        <div id="gameFormError" class="alert-error" hidden></div>
+
+        <div class="btn-row" style="margin-top:6px;">
+          <button type="button" id="cancelGameModalBtn" class="btn btn-secondary">ยกเลิก</button>
+          <button type="submit" class="btn btn-primary" style="flex:2;">บันทึกข้อมูลเกม</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL 2: CREATE / EDIT PACKAGE ==================== -->
+  <div id="packageModal" class="modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-backdrop" id="closePkgBackdrop"></div>
+    <div class="modal-dialog">
+      <button type="button" id="closePkgModalBtn" class="modal-close">✕</button>
+      <span class="tag" id="pkgModalKicker" style="margin-bottom:8px;">PACKAGE EDITOR</span>
+      <h2 id="pkgModalTitle" class="modal-title">จัดการแพ็กเกจ</h2>
+
+      <form id="packageEditorForm" class="form-stack">
+        <input type="hidden" id="editPkgId" />
+        <input type="hidden" id="editPkgGameId" />
+
+        <div class="field">
+          <label for="editPkgName" class="field-label">ชื่อแพ็กเกจ (จำนวนคูปอง / เพชร) *</label>
+          <input type="text" id="editPkgName" class="input" placeholder="เช่น 110 คูปอง" required />
+        </div>
+
+        <div class="field">
+          <label for="editPkgBonus" class="field-label">ข้อความโบนัส</label>
+          <input type="text" id="editPkgBonus" class="input" placeholder="เช่น แถมโบนัส +10 หรือ พอดีซื้อพาส" />
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px;">
+          <div class="field">
+            <label for="editPkgFullPrice" class="field-label">ราคาเต็มในเกม (฿)</label>
+            <input type="number" id="editPkgFullPrice" class="input" min="0" step="1" placeholder="เช่น 100" />
+          </div>
+          <div class="field">
+            <label for="editPkgPct" class="field-label">% ส่วนลด</label>
+            <input type="number" id="editPkgPct" class="input" min="0" max="99" step="1" placeholder="เช่น 10" />
+          </div>
+          <div class="field">
+            <label for="editPkgPrice" class="field-label">ราคาขายจริง (฿) *</label>
+            <input type="number" id="editPkgPrice" class="input" min="0" step="1" placeholder="เช่น 90" required />
+          </div>
+        </div>
+        <div style="display:flex; gap:5px; margin-top:-6px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
+          <span class="muted" style="font-size:0.75rem;">กดคำนวณ % ด่วน:</span>
+          <button type="button" class="btn-micro" data-pkg-modal-pct="0">ปกติ (0%)</button>
+          <button type="button" class="btn-micro" data-pkg-modal-pct="5">5%</button>
+          <button type="button" class="btn-micro" data-pkg-modal-pct="10">10%</button>
+          <button type="button" class="btn-micro" data-pkg-modal-pct="15">15%</button>
+          <button type="button" class="btn-micro" data-pkg-modal-pct="20">20%</button>
+          <button type="button" class="btn-micro" data-pkg-modal-pct="25">25%</button>
+          <button type="button" class="btn-micro" data-pkg-modal-pct="30">30%</button>
+          <button type="button" class="btn-micro" data-pkg-modal-pct="50">50%</button>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="field">
+            <label for="editPkgBadge" class="field-label">ป้ายกำกับ (Badge)</label>
+            <input type="text" id="editPkgBadge" class="input" placeholder="เช่น ขายดี, คุ้มสุด" />
+          </div>
+          <div class="field">
+            <label for="editPkgSku" class="field-label">รหัส SKU (เว้นว่างได้)</label>
+            <input type="text" id="editPkgSku" class="input" placeholder="เช่น ROV-07" />
+          </div>
+        </div>
+
+        <label class="check-label">
+          <input type="checkbox" id="editPkgActive" checked />
+          <span>เปิดขายแพ็กเกจนี้</span>
+        </label>
+
+        <div id="pkgFormError" class="alert-error" hidden></div>
+
+        <div class="btn-row" style="margin-top:6px;">
+          <button type="button" id="cancelPkgModalBtn" class="btn btn-secondary">ยกเลิก</button>
+          <button type="submit" class="btn btn-primary" style="flex:2;">บันทึกแพ็กเกจ</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL 3: STOREWIDE DISCOUNT PROMO ==================== -->
+  <div id="storewidePromoModal" class="modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-backdrop" id="closePromoBackdrop"></div>
+    <div class="modal-dialog">
+      <button type="button" id="closePromoModalBtn" class="modal-close">✕</button>
+      <span class="tag" style="margin-bottom:8px;">STOREWIDE PROMOTION</span>
+      <h2 class="modal-title">จัดโปรโมชั่นลดราคาทั้งร้าน</h2>
+      <p class="muted" style="font-size:0.88rem; margin:0 0 16px;">
+        ระบบจะคำนวณและปรับลดราคาทุกแพ็กเกจของทุกเกมตามเปอร์เซ็นต์ที่เลือก พร้อมตั้งป้ายลดราคาให้อัตโนมัติ
+      </p>
+
+      <form id="storewidePromoForm" class="form-stack">
+        <div class="field">
+          <label class="field-label">เลือกเปอร์เซ็นต์ส่วนลด (%)</label>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+            <button type="button" class="chip promo-pct-chip" data-pct="0">คืนราคาปกติ (0%)</button>
+            <button type="button" class="chip promo-pct-chip" data-pct="5">ลด 5%</button>
+            <button type="button" class="chip promo-pct-chip" data-pct="10">ลด 10%</button>
+            <button type="button" class="chip promo-pct-chip is-active" data-pct="15">ลด 15%</button>
+            <button type="button" class="chip promo-pct-chip" data-pct="20">ลด 20%</button>
+            <button type="button" class="chip promo-pct-chip" data-pct="25">ลด 25%</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <input type="number" id="customPromoPct" class="input" value="15" min="0" max="99" style="max-width:140px;" />
+            <span class="muted" style="font-size:0.9rem;">% จากราคาเต็มของทุกแพ็กเกจ</span>
+          </div>
+        </div>
+
+        <div class="btn-row" style="margin-top:14px;">
+          <button type="button" id="cancelPromoModalBtn" class="btn btn-secondary">ยกเลิก</button>
+          <button type="submit" class="btn btn-primary" style="flex:2;">⚡ ปรับใช้ส่วนลดทั้งร้านทันที</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL 4: BEAUTIFUL CUSTOM CONFIRM / ALERT ==================== -->
+  <div id="confirmDialogModal" class="modal confirm-modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-backdrop" id="confirmDialogBackdrop"></div>
+    <div class="modal-dialog confirm-dialog">
+      <div class="confirm-icon-wrap" id="confirmIconWrap"></div>
+      <div class="confirm-content">
+        <span class="tag confirm-tag" id="confirmTag">CONFIRMATION</span>
+        <h3 class="confirm-title" id="confirmTitle">ยืนยันการทำรายการ</h3>
+        <p class="confirm-message" id="confirmMessage"></p>
+        <div class="confirm-sub-box" id="confirmSubBox" hidden>
+          <span class="confirm-sub-icon">💡</span>
+          <span class="confirm-sub-text" id="confirmSubText"></span>
+        </div>
+      </div>
+      <div class="confirm-actions" id="confirmActions">
+        <button type="button" class="btn btn-secondary confirm-btn-cancel" id="confirmCancelBtn">ยกเลิก</button>
+        <button type="button" class="btn confirm-btn-ok" id="confirmOkBtn">ยืนยัน</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/admin.js?v=7"></script>
+</body>
+</html>

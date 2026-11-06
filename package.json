@@ -1,0 +1,25 @@
+{
+  "name": "clean-game-topup-store",
+  "version": "1.0.0",
+  "description": "Clean Minimal Game Top-Up Store & Admin Dashboard (Node.js + Built-in SQLite)",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "dev:frontend": "vite --config frontend/vite.config.js",
+    "build": "vite build --config frontend/vite.config.js"
+  },
+  "private": true,
+  "dependencies": {
+    "pg": "^8.23.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.2.1",
+    "vite": "^8.3.6"
+  }
+}
