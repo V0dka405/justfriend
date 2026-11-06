@@ -190,7 +190,7 @@ async function handleAdminRoutes(req, res, pathname) {
     const id = Number(orderMatch[1]);
     const body = await readJsonBody(req);
     const order = await storeDb.updateAdminOrder(id, body);
-    if (body.status === "completed") {
+    if (order.status === "completed" && !order._wasAlreadyCompleted) {
       topupService.processTopupOrder(order).catch((err) => {
         console.error("[TOPUP PROVIDER HOOK]", err.message);
       });
@@ -212,7 +212,7 @@ async function handleAdminRoutes(req, res, pathname) {
     const settings = await storeDb.updateSettings(body);
     logSecurityAudit("SETTINGS_UPDATED", {
       adminId: admin.id,
-      promptpayNumberMasked: body.promptpay_number ? "SET_OR_UPDATED" : "UNCHANGED",
+      promptpayIdMasked: body.promptpay_id ? "SET_OR_UPDATED" : "UNCHANGED",
       promptpayName: body.promptpay_name,
       promptpayQrUrl: body.promptpay_qr_url,
     });

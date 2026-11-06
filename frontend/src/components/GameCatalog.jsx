@@ -1,14 +1,22 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { getGameCoverSrc, makeCleanCoverSvg } from "../utils/helpers";
 
 export default function GameCatalog({ games, settings, onSelectGame }) {
   const [activeCategory, setActiveCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [poppingGameId, setPoppingGameId] = useState(null);
+  const clickTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    };
+  }, []);
 
   const handleGameTileClick = (game) => {
     setPoppingGameId(game.id);
-    setTimeout(() => {
+    if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    clickTimerRef.current = setTimeout(() => {
       onSelectGame(game);
     }, 210);
   };

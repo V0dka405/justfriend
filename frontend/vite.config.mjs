@@ -3,11 +3,11 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 export default defineConfig({
-  root: path.resolve(__dirname),
+  root: path.resolve(import.meta.dirname),
   plugins: [react()],
   publicDir: false,
   build: {
-    outDir: path.resolve(__dirname, "dist"),
+    outDir: path.resolve(import.meta.dirname, "dist"),
     emptyOutDir: true,
   },
   server: {

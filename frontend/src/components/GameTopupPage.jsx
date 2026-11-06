@@ -6,6 +6,7 @@ import {
   filterFeaturedBundles,
   saveRecentOrder,
 } from "../utils/helpers";
+import { uploadSlip, createOrder } from "../utils/api";
 import CheckoutSidebar from "./CheckoutSidebar";
 
 function SelectablePackageCard({
@@ -117,6 +118,11 @@ export default function GameTopupPage({
     setPlayerServer(game.require_server ? opts[0] || "" : "");
     setShowUidHint(false);
     setErrorMsg("");
+    setPlayerUid("");
+    setPlayerIgn("");
+    setUploadedSlipUrl("");
+    setSlipPreview("");
+    setSlipStatusText("รองรับไฟล์ JPG, PNG, WEBP ขนาดไม่เกิน 5 MB");
   }, [game]);
 
   useEffect(() => {
@@ -160,18 +166,7 @@ export default function GameTopupPage({
     setSlipStatusText("กำลังตรวจสอบและอัปโหลดสลิป...");
 
     try {
-      const res = await fetch("/api/upload-slip", {
-        method: "POST",
-        headers: {
-          "Content-Type": file.type || "application/octet-stream",
-          "X-Requested-With": "XMLHttpRequest",
-        },
-        body: file,
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "อัปโหลดสลิปไม่สำเร็จ");
-      }
+      const data = await uploadSlip(file);
       setUploadedSlipUrl(data.url);
       setSlipStatusText(`ไฟล์: ${file.name}`);
     } catch (err) {
@@ -228,18 +223,7 @@ export default function GameTopupPage({
         payment_slip_url: uploadedSlipUrl,
       };
 
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Requested-With": "XMLHttpRequest",
-        },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "ไม่สามารถสร้างรายการสั่งซื้อได้");
-      }
+      const data = await createOrder(payload);
 
       saveRecentOrder(
         data.order.order_code,

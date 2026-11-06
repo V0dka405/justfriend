@@ -36,8 +36,8 @@ export default function Footer({ settings, onGoHome, onOpenTrack }) {
           <div>
             <div className="footer-heading">ติดต่อฝ่ายบริการลูกค้า</div>
             <div className="footer-links">
-              <span>💬 LINE: {settings.support_line || "@topupstation"}</span>
-              <span>📘 Facebook: {settings.support_facebook || "TopUp Station"}</span>
+              <span>💬 LINE: {settings.contact_line || "@topupstation"}</span>
+              <span>📘 Facebook: {settings.contact_facebook || "TopUp Station"}</span>
             </div>
           </div>
         </div>

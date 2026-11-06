@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { STATUS_LABELS, formatMoney, getRecentOrders } from "../utils/helpers";
+import { trackOrder } from "../utils/api";
 
 export default function TrackOrderModal({
   isOpen,
@@ -26,21 +27,7 @@ export default function TrackOrderModal({
     setTrackedOrder(null);
     setIsLoading(true);
     try {
-      const res = await fetch("/api/orders/track", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Requested-With": "XMLHttpRequest",
-        },
-        body: JSON.stringify({
-          order_code: cleanCode,
-          phone_last4: cleanLast4,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "ไม่พบข้อมูลออเดอร์ กรุณาตรวจสอบอีกครั้ง");
-      }
+      const data = await trackOrder(cleanCode, cleanLast4);
       setTrackedOrder(data.order);
     } catch (err) {
       setErrorMsg(err.message || "ไม่สามารถตรวจสอบสถานะออเดอร์ได้");
@@ -134,7 +121,7 @@ export default function TrackOrderModal({
                 id="trackCodeInput"
                 type="text"
                 className="input"
-                placeholder="เช่น TP-2026..."
+                placeholder="เช่น TOP-20261107-A1B2C3D4"
                 value={orderCode}
                 onChange={(e) => setOrderCode(e.target.value)}
               />

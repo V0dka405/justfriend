@@ -22,10 +22,21 @@ const PATHS = {
   FRONTEND_JS_DIR: path.join(ROOT_DIR, "frontend", "js"),
   FRONTEND_IMAGES_DIR: path.join(ROOT_DIR, "frontend", "assets", "images"),
 
-  // Storage Directories
-  DATA_DIR: path.join(ROOT_DIR, "data"),
-  BACKUPS_DIR: path.join(ROOT_DIR, "data", "backups"),
-  UPLOADS_DIR: path.join(ROOT_DIR, "uploads"),
+  // Storage Directories (รองรับการ override ผ่าน env สำหรับชุดทดสอบอัตโนมัติ เพื่อไม่ให้กระทบข้อมูลจริง)
+  DATA_DIR: process.env.STORE_DATA_DIR
+    ? path.resolve(process.env.STORE_DATA_DIR)
+    : path.join(ROOT_DIR, "data"),
+  BACKUPS_DIR: process.env.STORE_BACKUPS_DIR
+    ? path.resolve(process.env.STORE_BACKUPS_DIR)
+    : path.join(
+        process.env.STORE_DATA_DIR
+          ? path.resolve(process.env.STORE_DATA_DIR)
+          : path.join(ROOT_DIR, "data"),
+        "backups"
+      ),
+  UPLOADS_DIR: process.env.STORE_UPLOADS_DIR
+    ? path.resolve(process.env.STORE_UPLOADS_DIR)
+    : path.join(ROOT_DIR, "uploads"),
 };
 
 module.exports = PATHS;

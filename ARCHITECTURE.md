@@ -19,22 +19,24 @@ d:\foru\
 │   │   ├── styles/
 │   │   │   └── storefront.css        #    - ดีไซน์โทนสว่างสดใส + Keyframes แอนิเมชัน springPop & กรอบไฟสีฟ้า
 │   │   └── utils/
+│   │       ├── api.js                #    - ตัวกลางเรียก HTTP API ฝั่งลูกค้า + แนบ CSRF Header อัตโนมัติ
 │   │       └── helpers.js            #    - ฟังก์ชันคำนวณเงิน คัดกรองบันเดิลแนะนำ และจัดการออเดอร์ล่าสุด
 │   ├── index.html                    # 2. ไฟล์ HTML ต้นแบบสำหรับ Vite React
-│   ├── vite.config.js                # 3. ตั้งค่าการ Build และ Dev Proxy ของ Vite
+│   ├── vite.config.mjs               # 3. ตั้งค่าการ Build และ Dev Proxy ของ Vite (ESM)
 │   ├── dist/                         # 4. ไฟล์ Production ที่คอมไพล์แล้ว (`npm run build`) เสิร์ฟที่ `/`
 │   ├── pages/
 │   │   └── admin.html                # 5. หน้าแดชบอร์ดแอดมิน (`/admin`)
-│   ├── css/ & js/                    # 6. สไตล์และสคริปต์ของระบบหลังบ้านแอดมิน (`admin.css`, `admin.js`)
+│   ├── css/ & js/                    # 6. สไตล์และสคริปต์ของระบบหลังบ้านแอดมิน (`theme.css`, `admin.css`, `admin.js`)
 │   └── assets/
 │       └── images/                   # 7. ไฟล์รูปปกและไอคอนเกม (`rov.png`, `valorant.png`, ฯลฯ)
 │
 ├── backend/                          # ⚙️ BACKEND LAYER (ระบบประมวลผล API & ฐานข้อมูล)
 │   ├── config/                       # 1. ชั้นตั้งค่าระบบ (Configuration Layer)
-│   │   ├── paths.js                  #    - รวม Path โฟลเดอร์ทั้งหมดไว้จุดเดียว ไม่หลงโฟลเดอร์
+│   │   ├── paths.js                  #    - รวม Path โฟลเดอร์ทั้งหมด + รองรับ Env Override สำหรับชุดทดสอบ
 │   │   └── env.js                    #    - ตัวโหลดค่าตัวแปรจากไฟล์ .env
 │   ├── database/                     # 2. ชั้นฐานข้อมูล (Data Access Layer)
 │   │   ├── index.js                  #    - ตัวสลับ Engine อัตโนมัติ (SQLite WAL <-> PostgreSQL)
+│   │   ├── shared.js                 #    - ศูนย์รวม Validation, คำนวณส่วนลด, รหัสออเดอร์ และข้อมูลเริ่มต้น
 │   │   ├── sqlite.js                 #    - ฐานข้อมูล SQLite โหมดทนทานสูง + สำรองและกู้คืนอัตโนมัติ
 │   │   └── postgres.js               #    - ฐานข้อมูล Cloud PostgreSQL Connection Pool
 │   ├── middlewares/                  # 3. ชั้นความปลอดภัย (Security & Auth Middleware Layer)
@@ -48,12 +50,19 @@ d:\foru\
 │   │   └── admin.routes.js           #    - API ฝั่งแอดมิน (/api/admin/*)
 │   └── app.js                        # 6. ตัวรวมระบบ HTTP Router & เสิร์ฟไฟล์ React (`frontend/dist`) + `/admin`
 │
+├── scripts/                          # 🔍 DEV & CI VERIFICATION
+│   └── verify.js                     #    - เช็ก Syntax + Build React + รัน Test ทั้งหมดในคำสั่งเดียว (`npm run verify`)
+│
+├── tests/                            # 🧪 AUTOMATED TESTS
+│   └── api.test.js                   #    - ชุดทดสอบความปลอดภัยและ API แยก Temp DB อัตโนมัติ (`npm test`)
+│
 ├── data/                             # 🗄️ ข้อมูลฐานข้อมูล SQLite (store.db) และไฟล์สำรอง (backups/)
 ├── uploads/                          # 🖼️ รูปสลิปโอนเงินและรูปภาพที่อัปโหลดเข้ามา
 ├── server.js                         # 🚀 จุดเริ่มต้นรันเซิร์ฟเวอร์ (`node server.js` หรือ `npm start`)
+├── .editorconfig                     # 📏 มาตรฐานย่อหน้าและ Encoding สำหรับทีมพัฒนา
 ├── .env                              # ตั้งค่าตัวแปรสภาพแวดล้อมจริง (ไม่ขึ้น Git)
 ├── .env.example                      # ตัวอย่างการตั้งค่า .env
-└── package.json                      # ข้อมูลโปรเจกต์และสคริปต์คำสั่งรัน (`npm run build`, `npm start`)
+└── package.json                      # ข้อมูลโปรเจกต์และสคริปต์คำสั่งรัน (`npm run verify`, `npm run build`, `npm start`)
 ```
 
 ---
@@ -64,11 +73,14 @@ d:\foru\
 | :--- | :--- |
 | แก้หน้าแรกแคตตาล็อกไอคอนเกม (React) | `frontend/src/components/GameCatalog.jsx` |
 | แก้หน้าตะกร้าเติมเกม & บันเดิลแนะนำ (React) | `frontend/src/components/GameTopupPage.jsx`, `frontend/src/components/CheckoutSidebar.jsx` |
+| แก้การเรียก API ฝั่งหน้าบ้าน React | `frontend/src/utils/api.js` |
 | แก้แอนิเมชันเด้งปึ๊ก / สีกรอบสีฟ้า / ดีไซน์หน้าร้าน | `frontend/src/styles/storefront.css` (แก้เสร็จรัน `npm run build`) |
 | แก้หน้าแอดมิน / ปุ่มโปรโมชั่น / Modal | `frontend/pages/admin.html`, `frontend/css/admin.css`, `frontend/js/admin.js` |
 | เพิ่มรูปไอคอนเกมเริ่มต้น | `frontend/assets/images/` |
 | แก้หรือเพิ่ม API ฝั่งลูกค้า | `backend/routes/public.routes.js` |
 | แก้หรือเพิ่ม API ฝั่งแอดมิน | `backend/routes/admin.routes.js` |
 | เชื่อมต่อ API เติมเกมอัตโนมัติ (Provider) | `backend/services/topup.service.js` |
-| แก้ตารางฐานข้อมูล / Query ข้อมูล | `backend/database/sqlite.js` และ `backend/database/postgres.js` |
+| แก้กฎตรวจสอบข้อมูล / ส่วนลด / เกมเริ่มต้น | `backend/database/shared.js` |
+| แก้ตารางฐานข้อมูล / SQL Query | `backend/database/sqlite.js` และ `backend/database/postgres.js` |
 | ปรับแก้ความปลอดภัย / Rate Limit | `backend/middlewares/auth.middleware.js`, `backend/middlewares/security.middleware.js` |
+| เช็กความถูกต้องทั้งระบบก่อนส่งงาน / PR | รัน `npm run verify` (`scripts/verify.js` + `tests/api.test.js`) |

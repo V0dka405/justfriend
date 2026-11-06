@@ -1,3 +1,11 @@
+/**
+ * Storefront UI Helpers (`frontend/src/utils/helpers.js`)
+ * -------------------------------------------------------
+ * Pure formatting, safe URL sanitization, fallback SVG cover generation,
+ * localStorage recent-order persistence, and featured-bundle filtering.
+ * For HTTP/API calls, use `frontend/src/utils/api.js` instead.
+ */
+
 const RECENT_ORDERS_KEY = "topup_recent_orders_v1";
 
 export const STATUS_LABELS = {

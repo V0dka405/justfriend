@@ -1,8 +1,12 @@
 "use strict";
 
+/**
+ * Layer: Backend Database — High-Durability SQLite WAL Adapter
+ * จัดการฐานข้อมูล SQLite พร้อมโหมด WAL, ระบบกู้คืนอัตโนมัติ (Disaster Recovery) และ Hot Backup
+ */
+
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const {
   hashPassword,
@@ -11,6 +15,25 @@ const {
   hashToken,
 } = require("../middlewares/auth.middleware");
 const { DATA_DIR, BACKUPS_DIR, UPLOADS_DIR } = require("../config/paths");
+const {
+  DEFAULT_SETTINGS,
+  ALLOWED_SETTING_KEYS,
+  VALID_ORDER_STATUSES,
+  STARTER_GAMES,
+  createHttpError,
+  generateOrderCode,
+  normalizeGameInput,
+  mergeGameFields,
+  normalizePackageInput,
+  mergePackageFields,
+  buildStarterPackagesForNewGame,
+  computeDiscountedPackagePrice,
+  validateAndNormalizeOrderInput,
+  formatCreatedOrderResponse,
+  parseTrackOrderLookup,
+  verifyAndFormatTrackedOrder,
+  attachOrderTransitionMeta,
+} = require("./shared");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(BACKUPS_DIR, { recursive: true });
@@ -34,21 +57,25 @@ function openDatabaseWithDisasterRecovery() {
     } catch (err) {
       console.error("[CRITICAL DB CORRUPTION DETECTED]", err.message);
       if (targetDb) {
-        try { targetDb.close(); } catch {}
+        try {
+          targetDb.close();
+        } catch {}
       }
 
-      // Isolate damaged database file
       const corruptedFile = path.join(DATA_DIR, `corrupted_${Date.now()}.db`);
       try {
         fs.renameSync(DB_PATH, corruptedFile);
-        try { fs.unlinkSync(`${DB_PATH}-wal`); } catch {}
-        try { fs.unlinkSync(`${DB_PATH}-shm`); } catch {}
+        try {
+          fs.unlinkSync(`${DB_PATH}-wal`);
+        } catch {}
+        try {
+          fs.unlinkSync(`${DB_PATH}-shm`);
+        } catch {}
         console.warn(`[DISASTER RECOVERY] Corrupted database quarantined to: ${corruptedFile}`);
       } catch (renameErr) {
         console.error("[DISASTER RECOVERY] Failed to quarantine corrupted DB:", renameErr);
       }
 
-      // Restore from latest valid backup
       const backups = listDatabaseBackups();
       if (backups.length > 0) {
         const latestBackupPath = path.join(BACKUPS_DIR, backups[0].filename);
@@ -57,10 +84,10 @@ function openDatabaseWithDisasterRecovery() {
         const recoveredDb = new DatabaseSync(DB_PATH);
         console.log("[DISASTER RECOVERY] Database successfully restored from backup!");
         return recoveredDb;
-      } else {
-        console.warn("[DISASTER RECOVERY] No backup snapshots found. Initializing a clean database.");
-        return new DatabaseSync(DB_PATH);
       }
+
+      console.warn("[DISASTER RECOVERY] No backup snapshots found. Initializing a clean database.");
+      return new DatabaseSync(DB_PATH);
     }
   }
 
@@ -71,15 +98,15 @@ const db = openDatabaseWithDisasterRecovery();
 
 // High-Durability, Concurrency & Performance PRAGMAs
 db.exec("PRAGMA journal_mode = WAL;");
-db.exec("PRAGMA synchronous = NORMAL;"); // Safe in WAL mode, impervious to power failure / app crashes
+db.exec("PRAGMA synchronous = NORMAL;");
 db.exec("PRAGMA foreign_keys = ON;");
-db.exec("PRAGMA busy_timeout = 8000;"); // Wait up to 8000ms instead of failing immediately with SQLITE_BUSY
-db.exec("PRAGMA wal_autocheckpoint = 1000;"); // Keep WAL log size bound
-db.exec("PRAGMA cache_size = -64000;"); // 64 MB fast cache
+db.exec("PRAGMA busy_timeout = 8000;");
+db.exec("PRAGMA wal_autocheckpoint = 1000;");
+db.exec("PRAGMA cache_size = -64000;");
 db.exec("PRAGMA temp_store = MEMORY;");
 
 // ---------------------------------------------------------------------------
-// Schema Initialization (8-Bit UID Game Top-Up Store)
+// Schema Initialization & Seed Data
 // ---------------------------------------------------------------------------
 db.exec(`
   CREATE TABLE IF NOT EXISTS store_settings (
@@ -163,26 +190,6 @@ db.exec(`
   );
 `);
 
-// ---------------------------------------------------------------------------
-// Seed Default Store Settings, Admin & Starter UID Games + Packages
-// ---------------------------------------------------------------------------
-const DEFAULT_SETTINGS = {
-  store_name: "TopUp Station",
-  store_tagline: "เติมเกมไว ปลอดภัย ใช้แค่ UID",
-  announcement_bar:
-    "เติมเกมไวใน 1–3 นาที ใช้แค่ UID ปลอดภัย 100% ไม่ต้องกรอกรหัสผ่าน! เช็คสถานะออเดอร์ได้เรียลไทม์",
-  hero_kicker: "DIRECT UID TOP-UP",
-  hero_heading: "เติมเกมง่ายใน 3 ขั้นตอน ไม่ต้องสมัครสมาชิก",
-  hero_subtext:
-    "เลือกเกม กรอก UID เลือกแพ็กเกจ แล้วโอนผ่าน PromptPay ระบบส่งรายการถึงแอดมินทันที ปลอดภัย รวดเร็ว",
-  promptpay_id: "081-234-5678",
-  promptpay_name: "TOPUP STATION",
-  promptpay_qr_url: "",
-  contact_line: "@topupstation",
-  contact_facebook: "fb.com/topupstation",
-  open_hours: "เปิดบริการทุกวัน 09:00 – 02:00 น.",
-};
-
 const insertSettingStmt = db.prepare(
   "INSERT OR IGNORE INTO store_settings (key, value) VALUES (?, ?)"
 );
@@ -207,159 +214,6 @@ if (!adminCountRow || adminCountRow.cnt === 0) {
 const gameCountRow = db.prepare("SELECT COUNT(*) AS cnt FROM games").get();
 if (!gameCountRow || gameCountRow.cnt === 0) {
   const now = new Date().toISOString();
-  const starterGames = [
-    {
-      slug: "rov",
-      name: "RoV: Arena of Valor",
-      publisher: "Garena",
-      category: "MOBA / FPS",
-      currency_name: "คูปอง",
-      uid_label: "OpenID (ตัวเลขในตั้งค่าเกม)",
-      uid_placeholder: "เช่น 6849201837462910",
-      uid_hint:
-        "เข้าเกม RoV > กดไอคอนฟันเฟือง (ตั้งค่า) มุมขวาบน > แท็บทั่วไป > กดปุ่มคัดลอก OpenID",
-      require_server: 0,
-      server_options: "",
-      discount_badge: "ลดสูงสุด 12%",
-      accent_color: "#ffd13b",
-      icon_key: "sword",
-      image_url: "/images/rov.png",
-      sort_order: 1,
-      packages: [
-        { sku: "ROV-01", name: "37 คูปอง", bonus_text: "เข้าไวใน 1 นาที", price: 32, full_price: 35, badge: "", sort_order: 1 },
-        { sku: "ROV-02", name: "110 คูปอง", bonus_text: "ยอดฮิตเริ่มต้น", price: 95, full_price: 105, badge: "ขายดี", sort_order: 2 },
-        { sku: "ROV-03", name: "225 คูปอง", bonus_text: "คุ้มค่าสายสกิน", price: 189, full_price: 215, badge: "", sort_order: 3 },
-        { sku: "ROV-04", name: "465 คูปอง", bonus_text: "ปลดล็อกสกินระดับ Limited", price: 385, full_price: 439, badge: "คุ้มสุด", sort_order: 4 },
-        { sku: "ROV-05", name: "950 คูปอง", bonus_text: "แถมโบนัสในเกมตามโปร", price: 775, full_price: 889, badge: "HOT", sort_order: 5 },
-        { sku: "ROV-06", name: "2,420 คูปอง", bonus_text: "แพ็กใหญ่สายสุ่มลอตเตอรี่", price: 1920, full_price: 2190, badge: "VIP", sort_order: 6 },
-      ],
-    },
-    {
-      slug: "valorant",
-      name: "VALORANT",
-      publisher: "Riot Games",
-      category: "MOBA / FPS",
-      currency_name: "VP",
-      uid_label: "Riot ID พร้อม #Tag",
-      uid_placeholder: "เช่น TenZ#TH1",
-      uid_hint:
-        "ดูชื่อและ #Tag ได้ที่มุมขวาบนในหน้าล็อบบี้เกม VALORANT (โซนไทย/SEA เท่านั้น)",
-      require_server: 0,
-      server_options: "",
-      discount_badge: "ลดสูงสุด 15%",
-      accent_color: "#ff4d6d",
-      icon_key: "crosshair",
-      image_url: "/images/valorant.png",
-      sort_order: 2,
-      packages: [
-        { sku: "VAL-01", name: "475 VP", bonus_text: "เหมาะเติมเศษซื้อสกิน", price: 135, full_price: 150, badge: "", sort_order: 1 },
-        { sku: "VAL-02", name: "1,000 VP", bonus_text: "พอดีซื้อ Battlepass!", price: 269, full_price: 300, badge: "ขายดี", sort_order: 2 },
-        { sku: "VAL-03", name: "2,050 VP", bonus_text: "สกินปืนระดับ Premium 1 กระบอก", price: 529, full_price: 600, badge: "HOT", sort_order: 3 },
-        { sku: "VAL-04", name: "3,650 VP", bonus_text: "สกินมีด / Exclusive", price: 930, full_price: 1050, badge: "", sort_order: 4 },
-        { sku: "VAL-05", name: "5,350 VP", bonus_text: "คุ้มสำหรับเหมาเซ็ตเล็ก", price: 1340, full_price: 1500, badge: "คุ้มสุด", sort_order: 5 },
-        { sku: "VAL-06", name: "11,000 VP", bonus_text: "เหมา Bundle ยกเซ็ตสุดคุ้ม", price: 2690, full_price: 3000, badge: "VIP", sort_order: 6 },
-      ],
-    },
-    {
-      slug: "genshin",
-      name: "Genshin Impact",
-      publisher: "HoYoverse",
-      category: "RPG / Gacha",
-      currency_name: "Genesis Crystals",
-      uid_label: "UID ตัวเลข 9 หลัก",
-      uid_placeholder: "เช่น 812345678",
-      uid_hint: "ดูเลข UID 9 หลักได้ที่มุมขวาล่างของหน้าจอขณะอยู่ในเกม หรือหน้าเมนู Paimon",
-      require_server: 1,
-      server_options: "Asia,America,Europe,TW/HK/MO",
-      discount_badge: "ลดสูงสุด 22%",
-      accent_color: "#38e2ff",
-      icon_key: "crystal",
-      image_url: "/images/genshin.png",
-      sort_order: 3,
-      packages: [
-        { sku: "GEN-01", name: "พรดวงจันทร์ (Welkin 30 วัน)", bonus_text: "รับทันที 300 + รายวันรวม 2,700 Primogems", price: 135, full_price: 179, badge: "ขายดี", sort_order: 1 },
-        { sku: "GEN-02", name: "300 + 30 Crystals", bonus_text: "โบนัสเติมครั้งแรก x2 ตามเงื่อนไขเกม", price: 135, full_price: 179, badge: "", sort_order: 2 },
-        { sku: "GEN-03", name: "980 + 110 Crystals", bonus_text: "ยอดนิยมเปิดกาชา", price: 419, full_price: 529, badge: "HOT", sort_order: 3 },
-        { sku: "GEN-04", name: "1,980 + 260 Crystals", bonus_text: "คุ้มกว่าเติมเองในเกม", price: 829, full_price: 1050, badge: "", sort_order: 4 },
-        { sku: "GEN-05", name: "3,280 + 600 Crystals", bonus_text: "การันตีตัวละคร 5 ดาวไวขึ้น", price: 1350, full_price: 1790, badge: "คุ้มสุด", sort_order: 5 },
-        { sku: "GEN-06", name: "6,480 + 1,600 Crystals", bonus_text: "แพ็กใหญ่ประหยัดกว่า 700 บาท!", price: 2690, full_price: 3490, badge: "VIP", sort_order: 6 },
-      ],
-    },
-    {
-      slug: "freefire",
-      name: "Free Fire",
-      publisher: "Garena",
-      category: "Battle Royale",
-      currency_name: "เพชร (Diamonds)",
-      uid_label: "Player UID ตัวเลข",
-      uid_placeholder: "เช่น 1928374650",
-      uid_hint: "แตะที่รูปโปรไฟล์มุมซ้ายบนในเกม Free Fire แล้วคัดลอกตัวเลข UID ใต้ชื่อตัวละคร",
-      require_server: 0,
-      server_options: "",
-      discount_badge: "โบนัสเพชรคุ้ม",
-      accent_color: "#ff922b",
-      icon_key: "flame",
-      image_url: "/images/freefire.png",
-      sort_order: 4,
-      packages: [
-        { sku: "FF-01", name: "105 เพชร", bonus_text: "เติมไวไม่ต้องรอนาน", price: 29, full_price: 35, badge: "", sort_order: 1 },
-        { sku: "FF-02", name: "345 เพชร", bonus_text: "เหมาะอัป Booyah Pass", price: 92, full_price: 105, badge: "ขายดี", sort_order: 2 },
-        { sku: "FF-03", name: "715 เพชร", bonus_text: "สุ่มสกินปืนอัปเกรด", price: 185, full_price: 215, badge: "", sort_order: 3 },
-        { sku: "FF-04", name: "1,450 เพชร", bonus_text: "คุ้มสุดสำหรับสายแต่งตัว", price: 369, full_price: 429, badge: "คุ้มสุด", sort_order: 4 },
-        { sku: "FF-05", name: "2,980 เพชร", bonus_text: "เหมาสุ่มกิจกรรมใหญ่", price: 739, full_price: 859, badge: "HOT", sort_order: 5 },
-      ],
-    },
-    {
-      slug: "pubgm",
-      name: "PUBG Mobile",
-      publisher: "Level Infinite",
-      category: "Battle Royale",
-      currency_name: "UC",
-      uid_label: "Character ID (ตัวเลข)",
-      uid_placeholder: "เช่น 5123456789",
-      uid_hint: "กดรูปโปรไฟล์มุมซ้ายบนในหน้าล็อบบี้ PUBG Mobile เพื่อดูเลข UID (รองรับเซิร์ฟ Global/TH)",
-      require_server: 0,
-      server_options: "",
-      discount_badge: "ลดสูงสุด 16%",
-      accent_color: "#2ee57d",
-      icon_key: "helmet",
-      image_url: "/images/pubgm.png",
-      sort_order: 5,
-      packages: [
-        { sku: "PUBG-01", name: "60 UC", bonus_text: "เติมด่วนเข้าทันที", price: 32, full_price: 35, badge: "", sort_order: 1 },
-        { sku: "PUBG-02", name: "325 UC", bonus_text: "รวมโบนัส 300+25 UC", price: 155, full_price: 179, badge: "ขายดี", sort_order: 2 },
-        { sku: "PUBG-03", name: "660 UC", bonus_text: "พอดีเปิด Royale Pass!", price: 305, full_price: 359, badge: "HOT", sort_order: 3 },
-        { sku: "PUBG-04", name: "1,800 UC", bonus_text: "รวมโบนัส 1,500+300 UC", price: 769, full_price: 899, badge: "คุ้มสุด", sort_order: 4 },
-        { sku: "PUBG-05", name: "3,850 UC", bonus_text: "สายสุ่ม X-Suit & รถหรู", price: 1520, full_price: 1790, badge: "VIP", sort_order: 5 },
-      ],
-    },
-    {
-      slug: "hsr",
-      name: "Honkai: Star Rail",
-      publisher: "HoYoverse",
-      category: "RPG / Gacha",
-      currency_name: "Oneiric Shards",
-      uid_label: "UID ตัวเลข 9 หลัก",
-      uid_placeholder: "เช่น 801234567",
-      uid_hint: "ดูเลข UID 9 หลักที่มุมซ้ายล่างของหน้าจอ หรือเปิดเมนูโทรศัพท์ในเกม",
-      require_server: 1,
-      server_options: "Asia,America,Europe,TW/HK/MO",
-      discount_badge: "ลดสูงสุด 22%",
-      accent_color: "#b47cff",
-      icon_key: "star",
-      image_url: "/images/hsr.png",
-      sort_order: 6,
-      packages: [
-        { sku: "HSR-01", name: "บัตรเสบียงรถไฟ (30 วัน)", bonus_text: "รับทันที 300 + รายวันรวม 2,700 Stellar Jade", price: 135, full_price: 179, badge: "ขายดี", sort_order: 1 },
-        { sku: "HSR-02", name: "300 + 30 Shards", bonus_text: "โบนัส x2 ครั้งแรกตามเงื่อนไขเกม", price: 135, full_price: 179, badge: "", sort_order: 2 },
-        { sku: "HSR-03", name: "980 + 110 Shards", bonus_text: "แพ็กยอดฮิตเปิดตู้ตัวละคร", price: 419, full_price: 529, badge: "HOT", sort_order: 3 },
-        { sku: "HSR-04", name: "1,980 + 260 Shards", bonus_text: "เปิด Light Cone ประจำตัว", price: 829, full_price: 1050, badge: "", sort_order: 4 },
-        { sku: "HSR-05", name: "3,280 + 600 Shards", bonus_text: "คุ้มค่าประหยัดกว่า 400 บาท", price: 1350, full_price: 1790, badge: "คุ้มสุด", sort_order: 5 },
-        { sku: "HSR-06", name: "6,480 + 1,600 Shards", bonus_text: "แพ็กใหญ่สายปลด Eidolon!", price: 2690, full_price: 3490, badge: "VIP", sort_order: 6 },
-      ],
-    },
-  ];
-
   const insertGame = db.prepare(`
     INSERT INTO games (
       slug, name, publisher, category, currency_name, uid_label, uid_placeholder,
@@ -374,7 +228,7 @@ if (!gameCountRow || gameCountRow.cnt === 0) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `);
 
-  for (const g of starterGames) {
+  for (const g of STARTER_GAMES) {
     const info = insertGame.run(
       g.slug,
       g.name,
@@ -412,13 +266,15 @@ if (!gameCountRow || gameCountRow.cnt === 0) {
   }
 }
 
-// Ensure default logos for all games
-db.prepare("UPDATE games SET image_url = '/images/rov.png' WHERE slug = 'rov'").run();
-db.prepare("UPDATE games SET image_url = '/images/valorant.png' WHERE slug = 'valorant'").run();
-db.prepare("UPDATE games SET image_url = '/images/freefire.png' WHERE slug = 'freefire'").run();
-db.prepare("UPDATE games SET image_url = '/images/genshin.png' WHERE slug = 'genshin'").run();
-db.prepare("UPDATE games SET image_url = '/images/pubgm.png' WHERE slug = 'pubgm'").run();
-db.prepare("UPDATE games SET image_url = '/images/hsr.png' WHERE slug = 'hsr'").run();
+// เติมรูปปกมาตรฐานเฉพาะกรณีที่ยังไม่มีรูปปก (ไม่ทับรูปปกที่แอดมินอัปโหลดเอง)
+const fillMissingCoverStmt = db.prepare(
+  "UPDATE games SET image_url = ? WHERE slug = ? AND (image_url IS NULL OR image_url = '')"
+);
+for (const g of STARTER_GAMES) {
+  if (g.image_url) {
+    fillMissingCoverStmt.run(g.image_url, g.slug);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Settings Queries
@@ -431,8 +287,6 @@ function getSettings() {
   }
   return out;
 }
-
-const ALLOWED_SETTING_KEYS = new Set(Object.keys(DEFAULT_SETTINGS));
 
 function updateSettings(patch) {
   const upsert = db.prepare(`
@@ -486,9 +340,7 @@ function listPublicGamesWithPackages() {
 }
 
 function listAdminGamesWithPackages() {
-  const games = db
-    .prepare("SELECT * FROM games ORDER BY sort_order ASC, id ASC")
-    .all();
+  const games = db.prepare("SELECT * FROM games ORDER BY sort_order ASC, id ASC").all();
   const pkgStmt = db.prepare(
     "SELECT * FROM packages WHERE game_id = ? ORDER BY sort_order ASC, price ASC, id ASC"
   );
@@ -505,60 +357,6 @@ function getGameById(id) {
     .prepare("SELECT * FROM packages WHERE game_id = ? ORDER BY sort_order ASC, price ASC, id ASC")
     .all(game.id);
   return { ...game, packages };
-}
-
-const VALID_ICONS = new Set([
-  "sword",
-  "crosshair",
-  "crystal",
-  "flame",
-  "helmet",
-  "star",
-  "gamepad",
-  "crown",
-]);
-
-function normalizeGameInput(input, existingSlug = "") {
-  const name = String(input.name || "").trim();
-  if (!name) {
-    const err = new Error("กรุณาระบุชื่อเกม");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  let slug = String(input.slug || existingSlug || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  if (!slug) {
-    slug = `game-${Math.random().toString(36).slice(2, 7)}`;
-  }
-
-  const rawColor = String(input.accent_color || "#ffd13b").trim();
-  const accentColor = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : "#ffd13b";
-  const rawIcon = String(input.icon_key || "gamepad").trim();
-  const iconKey = VALID_ICONS.has(rawIcon) ? rawIcon : "gamepad";
-
-  return {
-    slug: slug.slice(0, 48),
-    name: name.slice(0, 120),
-    publisher: String(input.publisher || "").trim().slice(0, 80),
-    category: (String(input.category || "MOBA / FPS").trim() || "MOBA / FPS").slice(0, 60),
-    currency_name: (String(input.currency_name || "คูปอง").trim() || "คูปอง").slice(0, 60),
-    uid_label: (String(input.uid_label || "UID ผู้เล่น").trim() || "UID ผู้เล่น").slice(0, 100),
-    uid_placeholder: String(input.uid_placeholder || "กรอก UID ของคุณ...").trim().slice(0, 120),
-    uid_hint: String(input.uid_hint || "").trim().slice(0, 400),
-    require_server: input.require_server ? 1 : 0,
-    server_options: String(input.server_options || "").trim().slice(0, 300),
-    discount_badge: String(input.discount_badge || "").trim().slice(0, 40),
-    accent_color: accentColor,
-    icon_key: iconKey,
-    image_url: String(input.image_url || "").trim().slice(0, 1000),
-    sort_order: Math.floor(Number(input.sort_order ?? 10) || 0),
-    is_active: input.is_active === false || input.is_active === 0 ? 0 : 1,
-  };
 }
 
 function createGame(input) {
@@ -596,9 +394,7 @@ function createGame(input) {
     return getGameById(info.lastInsertRowid);
   } catch (err) {
     if (String(err.message).includes("UNIQUE")) {
-      const e = new Error(`รหัสลิงก์เกม (Slug: ${g.slug}) ซ้ำกับเกมที่มีอยู่แล้ว`);
-      e.statusCode = 409;
-      throw e;
+      throw createHttpError(409, `รหัสลิงก์เกม (Slug: ${g.slug}) ซ้ำกับเกมที่มีอยู่แล้ว`);
     }
     throw err;
   }
@@ -607,31 +403,10 @@ function createGame(input) {
 function updateGame(id, input) {
   const existing = db.prepare("SELECT * FROM games WHERE id = ?").get(Number(id));
   if (!existing) {
-    const err = new Error("ไม่พบข้อมูลเกมที่ต้องการแก้ไข");
-    err.statusCode = 404;
-    throw err;
+    throw createHttpError(404, "ไม่พบข้อมูลเกมที่ต้องการแก้ไข");
   }
 
-  const merged = {
-    slug: input.slug !== undefined ? input.slug : existing.slug,
-    name: input.name !== undefined ? input.name : existing.name,
-    publisher: input.publisher !== undefined ? input.publisher : existing.publisher,
-    category: input.category !== undefined ? input.category : existing.category,
-    currency_name: input.currency_name !== undefined ? input.currency_name : existing.currency_name,
-    uid_label: input.uid_label !== undefined ? input.uid_label : existing.uid_label,
-    uid_placeholder: input.uid_placeholder !== undefined ? input.uid_placeholder : existing.uid_placeholder,
-    uid_hint: input.uid_hint !== undefined ? input.uid_hint : existing.uid_hint,
-    require_server: input.require_server !== undefined ? input.require_server : existing.require_server,
-    server_options: input.server_options !== undefined ? input.server_options : existing.server_options,
-    discount_badge: input.discount_badge !== undefined ? input.discount_badge : existing.discount_badge,
-    accent_color: input.accent_color !== undefined ? input.accent_color : existing.accent_color,
-    icon_key: input.icon_key !== undefined ? input.icon_key : existing.icon_key,
-    image_url: input.image_url !== undefined ? input.image_url : existing.image_url,
-    sort_order: input.sort_order !== undefined ? input.sort_order : existing.sort_order,
-    is_active: input.is_active !== undefined ? input.is_active : existing.is_active,
-  };
-
-  const g = normalizeGameInput(merged, existing.slug);
+  const g = mergeGameFields(existing, input);
   const now = new Date().toISOString();
 
   try {
@@ -665,9 +440,7 @@ function updateGame(id, input) {
     return getGameById(id);
   } catch (err) {
     if (String(err.message).includes("UNIQUE")) {
-      const e = new Error(`รหัสลิงก์เกม (Slug: ${g.slug}) ซ้ำกับเกมอื่น`);
-      e.statusCode = 409;
-      throw e;
+      throw createHttpError(409, `รหัสลิงก์เกม (Slug: ${g.slug}) ซ้ำกับเกมอื่น`);
     }
     throw err;
   }
@@ -676,71 +449,30 @@ function updateGame(id, input) {
 function deleteGame(id) {
   const info = db.prepare("DELETE FROM games WHERE id = ?").run(Number(id));
   if (!info.changes) {
-    const err = new Error("ไม่พบเกมที่ต้องการลบ");
-    err.statusCode = 404;
-    throw err;
+    throw createHttpError(404, "ไม่พบเกมที่ต้องการลบ");
   }
   return { deleted: true };
 }
 
 // ---------------------------------------------------------------------------
-// Package CRUD
+// Package CRUD & Discounts
 // ---------------------------------------------------------------------------
 function getPackageById(id) {
   return db.prepare("SELECT * FROM packages WHERE id = ?").get(Number(id));
 }
 
-function normalizePackageInput(input, existingSku = "") {
-  const gameId = Number(input.game_id);
-  if (!Number.isInteger(gameId) || gameId <= 0) {
-    const err = new Error("กรุณาเลือกเกมสำหรับแพ็กเกจนี้");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const game = db.prepare("SELECT id FROM games WHERE id = ?").get(gameId);
+function ensureGameExists(gameId) {
+  const game = db.prepare("SELECT id FROM games WHERE id = ?").get(Number(gameId));
   if (!game) {
-    const err = new Error("ไม่พบเกมที่ระบุ");
-    err.statusCode = 404;
-    throw err;
+    throw createHttpError(404, "ไม่พบเกมที่ระบุ");
   }
-
-  const name = String(input.name || "").trim();
-  if (!name) {
-    const err = new Error("กรุณาระบุชื่อแพ็กเกจ เช่น 110 คูปอง");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const price = Number(input.price);
-  if (!Number.isFinite(price) || price < 0) {
-    const err = new Error("ราคาขายต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const fullPrice = Number(input.full_price || 0);
-  let sku = String(input.sku || existingSku || "").trim().toUpperCase();
-  if (!sku) {
-    sku = `PKG-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
-  }
-
-  return {
-    game_id: gameId,
-    sku: sku.slice(0, 32),
-    name: name.slice(0, 140),
-    bonus_text: String(input.bonus_text || "").trim().slice(0, 160),
-    price: Math.round(price * 100) / 100,
-    full_price: Number.isFinite(fullPrice) && fullPrice > 0 ? Math.round(fullPrice * 100) / 100 : 0,
-    badge: String(input.badge || "").trim().slice(0, 30),
-    sort_order: Math.floor(Number(input.sort_order ?? 10) || 0),
-    is_active: input.is_active === false || input.is_active === 0 ? 0 : 1,
-  };
 }
 
 function createPackage(input) {
   const p = normalizePackageInput(input);
+  ensureGameExists(p.game_id);
   const now = new Date().toISOString();
+
   try {
     const info = db
       .prepare(
@@ -764,9 +496,7 @@ function createPackage(input) {
     return getPackageById(info.lastInsertRowid);
   } catch (err) {
     if (String(err.message).includes("UNIQUE")) {
-      const e = new Error(`รหัสแพ็กเกจ (SKU: ${p.sku}) ซ้ำกับรายการอื่น`);
-      e.statusCode = 409;
-      throw e;
+      throw createHttpError(409, `รหัสแพ็กเกจ (SKU: ${p.sku}) ซ้ำกับรายการอื่น`);
     }
     throw err;
   }
@@ -774,15 +504,8 @@ function createPackage(input) {
 
 function createStarterPackagesForGame(gameId, currencyName = "คูปอง", slugPrefix = "GM") {
   const gId = Number(gameId);
-  const cur = String(currencyName || "คูปอง").trim();
-  const prefix = String(slugPrefix || "GM").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4) || "PKG";
   const now = new Date().toISOString();
-
-  const starters = [
-    { sku: `${prefix}-01`, name: `100 ${cur}`, bonus: "แพ็กเริ่มต้นเติมไว", price: 89, full: 100, badge: "", order: 1 },
-    { sku: `${prefix}-02`, name: `300 ${cur}`, bonus: "ยอดนิยมสุดคุ้ม", price: 269, full: 300, badge: "ขายดี", order: 2 },
-    { sku: `${prefix}-03`, name: `500 ${cur}`, bonus: "โบนัสพิเศษในเกม", price: 440, full: 500, badge: "HOT", order: 3 },
-  ];
+  const starters = buildStarterPackagesForNewGame(currencyName, slugPrefix);
 
   const stmt = db.prepare(`
     INSERT INTO packages (
@@ -792,34 +515,23 @@ function createStarterPackagesForGame(gameId, currencyName = "คูปอง", 
 
   for (const p of starters) {
     try {
-      stmt.run(gId, p.sku, p.name, p.bonus, p.price, p.full, p.badge, p.order, now, now);
+      stmt.run(gId, p.sku, p.name, p.bonus_text, p.price, p.full_price, p.badge, p.sort_order, now, now);
     } catch {
-      stmt.run(gId, `${p.sku}-${Date.now().toString().slice(-4)}`, p.name, p.bonus, p.price, p.full, p.badge, p.order, now, now);
+      const uniqueSku = `${p.sku}-${Date.now().toString().slice(-4)}`;
+      stmt.run(gId, uniqueSku, p.name, p.bonus_text, p.price, p.full_price, p.badge, p.sort_order, now, now);
     }
   }
+  return getGameById(gId);
 }
 
 function updatePackage(id, input) {
   const existing = getPackageById(id);
   if (!existing) {
-    const err = new Error("ไม่พบแพ็กเกจที่ต้องการแก้ไข");
-    err.statusCode = 404;
-    throw err;
+    throw createHttpError(404, "ไม่พบแพ็กเกจที่ต้องการแก้ไข");
   }
 
-  const merged = {
-    game_id: input.game_id !== undefined ? input.game_id : existing.game_id,
-    sku: input.sku !== undefined ? input.sku : existing.sku,
-    name: input.name !== undefined ? input.name : existing.name,
-    bonus_text: input.bonus_text !== undefined ? input.bonus_text : existing.bonus_text,
-    price: input.price !== undefined ? input.price : existing.price,
-    full_price: input.full_price !== undefined ? input.full_price : existing.full_price,
-    badge: input.badge !== undefined ? input.badge : existing.badge,
-    sort_order: input.sort_order !== undefined ? input.sort_order : existing.sort_order,
-    is_active: input.is_active !== undefined ? input.is_active : existing.is_active,
-  };
-
-  const p = normalizePackageInput(merged, existing.sku);
+  const p = mergePackageFields(existing, input);
+  ensureGameExists(p.game_id);
   const now = new Date().toISOString();
 
   try {
@@ -844,9 +556,7 @@ function updatePackage(id, input) {
     return getPackageById(id);
   } catch (err) {
     if (String(err.message).includes("UNIQUE")) {
-      const e = new Error(`รหัสแพ็กเกจ (SKU: ${p.sku}) ซ้ำกับรายการอื่น`);
-      e.statusCode = 409;
-      throw e;
+      throw createHttpError(409, `รหัสแพ็กเกจ (SKU: ${p.sku}) ซ้ำกับรายการอื่น`);
     }
     throw err;
   }
@@ -855,9 +565,7 @@ function updatePackage(id, input) {
 function deletePackage(id) {
   const info = db.prepare("DELETE FROM packages WHERE id = ?").run(Number(id));
   if (!info.changes) {
-    const err = new Error("ไม่พบแพ็กเกจที่ต้องการลบ");
-    err.statusCode = 404;
-    throw err;
+    throw createHttpError(404, "ไม่พบแพ็กเกจที่ต้องการลบ");
   }
   return { deleted: true };
 }
@@ -867,14 +575,11 @@ function applyGameDiscount(gameId, percent) {
   const pct = Math.max(0, Math.min(99, Math.round(Number(percent) || 0)));
   const game = getGameById(gId);
   if (!game) {
-    const err = new Error("ไม่พบเกมที่ต้องการปรับลดราคา");
-    err.statusCode = 404;
-    throw err;
+    throw createHttpError(404, "ไม่พบเกมที่ต้องการปรับลดราคา");
   }
 
   const pkgs = db.prepare("SELECT * FROM packages WHERE game_id = ?").all(gId);
   const now = new Date().toISOString();
-
   const updatePkgStmt = db.prepare(`
     UPDATE packages
     SET price = ?, full_price = ?, updated_at = ?
@@ -884,18 +589,8 @@ function applyGameDiscount(gameId, percent) {
   db.exec("BEGIN TRANSACTION;");
   try {
     for (const p of pkgs) {
-      let full = Number(p.full_price) || 0;
-      let curr = Number(p.price) || 0;
-      if (full <= 0 || full < curr) {
-        full = curr;
-      }
-      let newPrice;
-      if (pct === 0) {
-        newPrice = full;
-      } else {
-        newPrice = Math.max(1, Math.round(full * (1 - pct / 100)));
-      }
-      updatePkgStmt.run(newPrice, full, now, p.id);
+      const { newPrice, fullPrice } = computeDiscountedPackagePrice(p, pct);
+      updatePkgStmt.run(newPrice, fullPrice, now, p.id);
     }
 
     const badgeText = pct > 0 ? `ลดสูงสุด ${pct}%` : "";
@@ -910,7 +605,7 @@ function applyGameDiscount(gameId, percent) {
     throw err;
   }
 
-  return listAdminGamesWithPackages().find((g) => g.id === gId);
+  return getGameById(gId);
 }
 
 function applyStorewideDiscount(percent) {
@@ -939,25 +634,8 @@ function batchUpdatePackages(items) {
       const existing = getPackageById(id);
       if (!existing) continue;
 
-      let price = existing.price;
-      if (it.price !== undefined) {
-        const rawPrice = Number(it.price);
-        if (Number.isFinite(rawPrice)) {
-          price = Math.min(1_000_000, Math.max(0, Math.round(rawPrice * 100) / 100));
-        }
-      }
-
-      let full_price = existing.full_price;
-      if (it.full_price !== undefined) {
-        const rawFull = Number(it.full_price);
-        if (Number.isFinite(rawFull)) {
-          full_price = Math.min(1_000_000, Math.max(0, Math.round(rawFull * 100) / 100));
-        }
-      }
-
-      const badge = it.badge !== undefined ? String(it.badge).trim().slice(0, 30) : existing.badge;
-      const is_active = it.is_active !== undefined ? (it.is_active ? 1 : 0) : existing.is_active;
-      stmt.run(price, full_price, badge, is_active, now, id);
+      const p = mergePackageFields(existing, it);
+      stmt.run(p.price, p.full_price, p.badge, p.is_active, now, id);
     }
     db.exec("COMMIT;");
   } catch (err) {
@@ -969,102 +647,28 @@ function batchUpdatePackages(items) {
 }
 
 // ---------------------------------------------------------------------------
-// Top-Up Order Creation & Tracking
+// Top-Up Order Creation, Tracking & Fulfillment
 // ---------------------------------------------------------------------------
-function generateOrderCode() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  // 4 random bytes = 8 hex chars (4,294,967,296 entropy per day) preventing brute-force IDOR (H-02)
-  const rand = crypto.randomBytes(4).toString("hex").toUpperCase();
-  return `TOP-${y}${m}${d}-${rand}`;
-}
-
-function createTopupOrder(payload) {
+function createTopupOrder(payload = {}) {
   const packageId = Number(payload.package_id);
-  const playerUid = String(payload.player_uid || "").trim();
-  const playerServer = String(payload.player_server || "").trim();
-  const playerIgn = String(payload.player_ign || "").trim();
-  const customerPhone = String(payload.customer_phone || "").trim();
-  const customerLine = String(payload.customer_line || "").trim();
-  const note = String(payload.note || "").trim();
-  const paymentSlipUrl = String(payload.payment_slip_url || "").trim().slice(0, 500);
-
   if (!Number.isInteger(packageId) || packageId <= 0) {
-    const err = new Error("กรุณาเลือกแพ็กเกจที่ต้องการเติมก่อนกดยืนยัน");
-    err.statusCode = 400;
-    throw err;
+    throw createHttpError(400, "กรุณาเลือกแพ็กเกจที่ต้องการเติมก่อนกดยืนยัน");
   }
 
   const pkg = db
     .prepare("SELECT * FROM packages WHERE id = ? AND is_active = 1")
     .get(packageId);
-  if (!pkg) {
-    const err = new Error("แพ็กเกจนี้ไม่พร้อมให้บริการในขณะนี้ กรุณาเลือกใหม่");
-    err.statusCode = 404;
-    throw err;
-  }
+  const game = pkg
+    ? db.prepare("SELECT * FROM games WHERE id = ? AND is_active = 1").get(pkg.game_id)
+    : null;
 
-  const game = db
-    .prepare("SELECT * FROM games WHERE id = ? AND is_active = 1")
-    .get(pkg.game_id);
-  if (!game) {
-    const err = new Error("เกมนี้ปิดปรับปรุงชั่วคราว");
-    err.statusCode = 400;
-    throw err;
-  }
+  const normalized = validateAndNormalizeOrderInput(payload, pkg, game, UPLOADS_DIR);
 
-  if (!playerUid || playerUid.length < 3) {
-    const err = new Error(`กรุณากรอก ${game.uid_label} ให้ครบถ้วน`);
-    err.statusCode = 400;
-    throw err;
-  }
-
-  if (game.require_server && !playerServer) {
-    const err = new Error("กรุณาเลือก Server ของบัญชีเกมก่อนชำระเงิน");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const phoneDigits = customerPhone.replace(/\D/g, "");
-  if (phoneDigits.length < 9 || phoneDigits.length > 15) {
-    const err = new Error("กรุณากรอกเบอร์โทรศัพท์ที่ติดต่อได้ (9–10 หลัก) เพื่อใช้เช็คสถานะออเดอร์");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  if (!paymentSlipUrl) {
-    const err = new Error("กรุณาแนบรูปสลิปโอนเงินเพื่อยืนยันการเติมเกม");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  // Validate exact /uploads/<uuid>.<ext> pattern to block external phishing links (H-01)
-  const SLIP_URL_RE = /^\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp))$/i;
-  const slipMatch = SLIP_URL_RE.exec(paymentSlipUrl);
-  if (!slipMatch) {
-    const err = new Error("รูปแบบลิงก์รูปสลิปไม่ถูกต้อง กรุณาอัปโหลดสลิปใหม่");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  // Verify file exists on local disk
-  const slipDiskPath = path.join(UPLOADS_DIR, slipMatch[1]);
-  if (!fs.existsSync(slipDiskPath)) {
-    const err = new Error("ไม่พบไฟล์สลิปในระบบ กรุณาอัปโหลดสลิปใหม่อีกครั้ง");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  // Prevent slip replay (reuse across orders)
   const duplicateSlip = db
     .prepare("SELECT order_code FROM orders WHERE payment_slip_url = ?")
-    .get(paymentSlipUrl);
+    .get(normalized.paymentSlipUrl);
   if (duplicateSlip) {
-    const err = new Error("สลิปโอนเงินนี้ถูกใช้งานในระบบไปแล้ว กรุณาใช้สลิปรายการใหม่");
-    err.statusCode = 409;
-    throw err;
+    throw createHttpError(409, "สลิปโอนเงินนี้ถูกใช้งานในระบบไปแล้ว กรุณาใช้สลิปรายการใหม่");
   }
 
   const now = new Date().toISOString();
@@ -1090,75 +694,28 @@ function createTopupOrder(payload) {
       pkg.sku,
       pkg.name,
       pkg.bonus_text || "",
-      playerUid.slice(0, 120),
-      playerServer.slice(0, 80),
-      playerIgn.slice(0, 80),
-      customerPhone.slice(0, 30),
-      customerLine.slice(0, 80),
-      note.slice(0, 300),
+      normalized.playerUid,
+      normalized.playerServer,
+      normalized.playerIgn,
+      normalized.customerPhone,
+      normalized.customerLine,
+      normalized.note,
       pkg.price,
-      paymentSlipUrl,
+      normalized.paymentSlipUrl,
       now,
       now
     );
 
-  return {
-    id: Number(info.lastInsertRowid),
-    order_code: orderCode,
-    game_name: game.name,
-    package_name: pkg.name,
-    bonus_text: pkg.bonus_text,
-    player_uid: playerUid,
-    player_server: playerServer,
-    player_ign: playerIgn,
-    phone_last4: phoneDigits.slice(-4),
-    amount: pkg.price,
-    status: "pending",
-    created_at: now,
-  };
+  return formatCreatedOrderResponse(info.lastInsertRowid, orderCode, game, pkg, normalized, now);
 }
 
 function trackPublicOrder(orderCode, phoneLast4) {
-  const code = String(orderCode || "").trim().toUpperCase();
-  const last4 = String(phoneLast4 || "").replace(/\D/g, "");
-  if (!code || last4.length !== 4) {
-    const err = new Error("กรุณากรอกรหัสใบสั่งซื้อ และเลขท้ายเบอร์โทร 4 หลัก");
-    err.statusCode = 400;
-    throw err;
-  }
-
+  const { code, last4 } = parseTrackOrderLookup(orderCode, phoneLast4);
   const order = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(code);
-  if (!order) {
-    const err = new Error("ไม่พบรายการสั่งซื้อ หรือเลขท้ายเบอร์โทร 4 หลักไม่ตรงกัน");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const digits = String(order.customer_phone || "").replace(/\D/g, "");
-  if (!digits.endsWith(last4)) {
-    const err = new Error("ไม่พบรายการสั่งซื้อ หรือเลขท้ายเบอร์โทร 4 หลักไม่ตรงกัน");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  return {
-    order_code: order.order_code,
-    game_name: order.game_name,
-    package_name: order.package_name,
-    bonus_text: order.bonus_text,
-    player_uid: order.player_uid,
-    player_server: order.player_server,
-    player_ign: order.player_ign,
-    amount: order.amount,
-    status: order.status,
-    admin_note: order.admin_note,
-    created_at: order.created_at,
-    updated_at: order.updated_at,
-  };
+  return verifyAndFormatTrackedOrder(order, last4);
 }
 
 function listAdminOrders() {
-  // Prioritize pending and processing orders so spamming fake orders cannot push real orders out of view (M-01)
   return db
     .prepare(
       `SELECT * FROM orders 
@@ -1168,19 +725,10 @@ function listAdminOrders() {
     .all();
 }
 
-const VALID_ORDER_STATUSES = new Set([
-  "pending",
-  "processing",
-  "completed",
-  "cancelled",
-]);
-
-function updateAdminOrder(orderId, patch) {
+function updateAdminOrder(orderId, patch = {}) {
   const existing = db.prepare("SELECT * FROM orders WHERE id = ?").get(Number(orderId));
   if (!existing) {
-    const err = new Error("ไม่พบออเดอร์ที่ต้องการอัปเดต");
-    err.statusCode = 404;
-    throw err;
+    throw createHttpError(404, "ไม่พบออเดอร์ที่ต้องการอัปเดต");
   }
 
   const nextStatus =
@@ -1197,7 +745,8 @@ function updateAdminOrder(orderId, patch) {
     "UPDATE orders SET status = ?, admin_note = ?, updated_at = ? WHERE id = ?"
   ).run(nextStatus, nextAdminNote, now, existing.id);
 
-  return db.prepare("SELECT * FROM orders WHERE id = ?").get(existing.id);
+  const updated = db.prepare("SELECT * FROM orders WHERE id = ?").get(existing.id);
+  return attachOrderTransitionMeta({ ...updated }, existing.status);
 }
 
 function getAdminStats() {
@@ -1297,16 +846,12 @@ function logoutSession(rawToken) {
 function changeAdminPassword(adminId, currentPassword, newPassword) {
   const next = String(newPassword || "");
   if (next.length < 8 || next.length > 128) {
-    const err = new Error("รหัสผ่านใหม่ต้องมีความยาวระหว่าง 8 ถึง 128 ตัวอักษร");
-    err.statusCode = 400;
-    throw err;
+    throw createHttpError(400, "รหัสผ่านใหม่ต้องมีความยาวระหว่าง 8 ถึง 128 ตัวอักษร");
   }
 
   const admin = db.prepare("SELECT * FROM admins WHERE id = ?").get(Number(adminId));
   if (!admin || !verifyPassword(currentPassword, admin.password_salt, admin.password_hash)) {
-    const err = new Error("รหัสผ่านปัจจุบันไม่ถูกต้อง");
-    err.statusCode = 401;
-    throw err;
+    throw createHttpError(401, "รหัสผ่านปัจจุบันไม่ถูกต้อง");
   }
 
   const { salt, hash } = hashPassword(next);
@@ -1340,12 +885,8 @@ function createDatabaseBackup(reason = "auto") {
   const fullPath = path.join(BACKUPS_DIR, filename);
   const cleanPath = fullPath.replace(/\\/g, "/");
 
-  // VACUUM INTO produces a 100% consistent, defragmented live hot backup without read/write locks
   db.exec(`VACUUM INTO '${cleanPath}'`);
-
   const stat = fs.statSync(fullPath);
-
-  // Keep latest 10 backup snapshots to prevent storage exhaustion
   pruneOldBackups(10);
 
   return {
@@ -1368,12 +909,10 @@ function pruneOldBackups(keepCount = 10) {
       })
       .sort((a, b) => b.time - a.time);
 
-    if (files.length > keepCount) {
-      for (let i = keepCount; i < files.length; i++) {
-        try {
-          fs.unlinkSync(files[i].path);
-        } catch {}
-      }
+    for (let i = keepCount; i < files.length; i++) {
+      try {
+        fs.unlinkSync(files[i].path);
+      } catch {}
     }
   } catch (err) {
     console.error("[DB] Failed to prune old backups:", err);
@@ -1456,14 +995,12 @@ function closeDatabaseCleanly() {
   }
 }
 
-// Automatically create initial backup on startup if none exists or older than 6 hours
 try {
   const existingBackups = listDatabaseBackups();
-  const nowMs = Date.now();
   const sixHoursMs = 6 * 60 * 60 * 1000;
   const needsInitialBackup =
     existingBackups.length === 0 ||
-    nowMs - new Date(existingBackups[0].createdAt).getTime() > sixHoursMs;
+    Date.now() - new Date(existingBackups[0].createdAt).getTime() > sixHoursMs;
 
   if (needsInitialBackup) {
     createDatabaseBackup("startup");
@@ -1473,7 +1010,6 @@ try {
   console.error("[DB] Startup backup failed:", err);
 }
 
-// Scheduled auto backup and WAL truncation every 6 hours
 setInterval(() => {
   try {
     createDatabaseBackup("auto");

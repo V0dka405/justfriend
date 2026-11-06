@@ -5,6 +5,7 @@ import GameTopupPage from "./components/GameTopupPage";
 import ReceiptModal from "./components/ReceiptModal";
 import TrackOrderModal from "./components/TrackOrderModal";
 import Footer from "./components/Footer";
+import { fetchStorefront } from "./utils/api";
 
 export default function App() {
   const [settings, setSettings] = useState({});
@@ -62,8 +63,7 @@ export default function App() {
 
     async function loadStorefront() {
       try {
-        const res = await fetch("/api/storefront");
-        const data = await res.json();
+        const data = await fetchStorefront();
         if (cancelled) return;
 
         const nextSettings = data.settings || {};

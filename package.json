@@ -9,8 +9,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "dev:frontend": "vite --config frontend/vite.config.js",
-    "build": "vite build --config frontend/vite.config.js"
+    "dev:frontend": "vite --config frontend/vite.config.mjs",
+    "build": "vite build --config frontend/vite.config.mjs",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "verify": "node scripts/verify.js"
   },
   "private": true,
   "dependencies": {

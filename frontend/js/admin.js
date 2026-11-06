@@ -1,3 +1,17 @@
+/**
+ * Layer: Frontend Admin — Control Room Application (/admin)
+ *
+ * โครงสร้างไฟล์ (สำหรับทีมพัฒนา):
+ *   1. State & Formatting / Escaping Helpers
+ *   2. Custom Confirm Dialog & Toast Notification
+ *   3. Admin API Client (แนบ X-Requested-With อัตโนมัติ)
+ *   4. Screen & Tab Navigation
+ *   5. Tab 1: Overview & Quick Promo Controller
+ *   6. Tab 2: Orders Fulfillment
+ *   7. Tab 3: Games & Packages Pricing Studio
+ *   8. Tab 4: Store Settings, Password & Database Health
+ *   9. DOM Event Delegation & Bootstrap
+ */
 (() => {
   "use strict";
 
@@ -217,16 +231,6 @@
     });
   }
 
-  function showCustomAlert(options = {}) {
-    const opts = typeof options === "string" ? { message: options } : options;
-    return showCustomConfirm({
-      ...opts,
-      tag: opts.tag || "NOTICE",
-      cancelText: null,
-      confirmText: opts.okText || "ตกลง",
-    });
-  }
-
   function setText(id, val) {
     const el = document.getElementById(id);
     if (el && val !== undefined) el.textContent = val;
@@ -360,6 +364,26 @@
         `;
       })
       .join("");
+  }
+
+  function syncCatalogKpiFromGames() {
+    let activeGames = 0;
+    let activePkgs = 0;
+    let totalPkgs = 0;
+    for (const g of adminGames) {
+      if (g.is_active) activeGames += 1;
+      const pkgs = Array.isArray(g.packages) ? g.packages : [];
+      totalPkgs += pkgs.length;
+      for (const p of pkgs) {
+        if (p.is_active) activePkgs += 1;
+      }
+    }
+    adminStats.total_games = adminGames.length;
+    adminStats.active_games = activeGames;
+    adminStats.total_packages = totalPkgs;
+    adminStats.active_packages = activePkgs;
+    setText("navGamesBadge", String(adminGames.length));
+    setText("kpiCatalog", `${activeGames} เกม / ${activePkgs} แพ็ก`);
   }
 
   function renderOverviewTab() {
@@ -640,7 +664,7 @@
     navEl.innerHTML = html;
   }
 
-  function renderGameAdminBlock(g, isSingleFocus = false) {
+  function renderGameAdminBlock(g) {
     const pkgs = Array.isArray(g.packages) ? g.packages : [];
     const activeTag = g.is_active
       ? `<span class="tag tag-success">เปิดขาย</span>`
@@ -853,7 +877,7 @@
           </span>
         </div>
         <div style="display:flex; flex-direction:column; gap:16px;">
-          ${filteredGames.map((g) => renderGameAdminBlock(g, false)).join("")}
+          ${filteredGames.map((g) => renderGameAdminBlock(g)).join("")}
         </div>
       `;
       return;
@@ -882,7 +906,7 @@
           ดูทุกเกมพร้อมกัน →
         </button>
       </div>
-      ${renderGameAdminBlock(selectedGame, true)}
+      ${renderGameAdminBlock(selectedGame)}
     `;
   }
 
@@ -919,6 +943,7 @@
         }
       }
 
+      syncCatalogKpiFromGames();
       tr.classList.remove("is-dirty");
       if (indicator) {
         indicator.textContent = "✓ บันทึกแล้ว";
@@ -957,6 +982,7 @@
       if (Array.isArray(res.games)) {
         adminGames = res.games;
       }
+      syncCatalogKpiFromGames();
       rows.forEach((tr) => {
         tr.classList.remove("is-dirty");
         const ind = tr.querySelector(".save-indicator");
